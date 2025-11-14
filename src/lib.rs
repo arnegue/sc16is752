@@ -45,6 +45,7 @@
 
 use embedded_hal::i2c::I2c;
 use embedded_hal::spi::SpiDevice;
+use heapless::Vec;
 
 /// UARTs Channel A (TXA/RXA) and Channel B (TXB/RXB)
 #[derive(Debug, Copy, Clone)]
@@ -216,6 +217,9 @@ impl Default for UartConfig {
     }
 }
 
+pub const FIFO_SIZE: usize = 64;
+pub const FIFO_MAX_TRANSMITION_LENGTH: usize = FIFO_SIZE + 1; // +1 because the first transmition bytes is the timepoint where on the Master sends it's transmition byte. After that up to 64 byte may get received
+
 pub trait Bus {
     type Error;
 
@@ -227,6 +231,13 @@ pub trait Bus {
     ) -> Result<(), Self::Error>;
 
     fn read_register(&mut self, channel: Channel, reg: Registers) -> Result<u8, Self::Error>;
+
+    fn read_cycle(
+        &mut self,
+        channel: Channel,
+        reg: Registers,
+        length: usize,
+    ) -> Result<Vec<u8, FIFO_MAX_TRANSMITION_LENGTH>, Self::Error>;
 }
 
 #[derive(Debug)]
@@ -262,6 +273,15 @@ where
                 &mut result,
             )
             .and(Ok(result[0]))
+    }
+
+    fn read_cycle(
+        &mut self,
+        channel: Channel,
+        reg: Registers,
+        length: usize,
+    ) -> Result<Vec<u8, FIFO_MAX_TRANSMITION_LENGTH>, Self::Error> {
+        Ok(Vec::new())
     }
 
     fn write_register(
@@ -304,6 +324,37 @@ where
                 &[1 << 7 | (reg as u8) << 3 | (channel as u8) << 1, 0xaa],
             )
             .and(Ok(result[1]))
+    }
+
+    fn read_cycle(
+        &mut self,
+        channel: Channel,
+        reg: Registers,
+        length: usize,
+    ) -> Result<Vec<u8, FIFO_MAX_TRANSMITION_LENGTH>, Self::Error> {
+        if length > FIFO_SIZE {
+            // Return error if requested length exceeds buffer capacity
+            return Ok(Vec::new());
+        }
+
+        // Prepare TX buffer
+        let mut tx_data: Vec<u8, FIFO_MAX_TRANSMITION_LENGTH> = Vec::new();
+        tx_data.resize_default(length + 1).unwrap();
+        tx_data[0] = 0x80u8 | (((reg as u8) << 3) | ((channel as u8) << 1));
+
+        // Prepare RX buffer
+        let mut rx_data: Vec<u8, FIFO_MAX_TRANSMITION_LENGTH> = Vec::new();
+        rx_data.resize_default(length + 1).unwrap(); // fill with zeros
+
+        // SPI transfer
+        match self.spi.transfer(&mut rx_data, &tx_data) {
+            Ok(_) => {
+                // Remove first dummy byte
+                rx_data.remove(0);
+                Ok(rx_data)
+            }
+            Err(e) => Err(e),
+        }
     }
 
     fn write_register(
@@ -708,6 +759,10 @@ where
             }
         }
         Ok(())
+    }
+
+    pub fn read_cycle(&mut self, channel: Channel, length: usize) -> Result<Vec<u8, FIFO_MAX_TRANSMITION_LENGTH>, BUS::Error> {
+        self.bus.read_cycle(channel, Registers::RhrThr, length)
     }
 }
 
