@@ -239,6 +239,14 @@ pub trait Bus {
         reg: Registers,
         length: usize,
     ) -> Result<Vec<u8, FIFO_MAX_TRANSMITION_LENGTH>, Self::Error>;
+
+    fn write_cycle(
+        &mut self,
+        channel: Channel,
+        reg: Registers,
+        payload: Vec<u8, FIFO_MAX_TRANSMITION_LENGTH>,
+        length: usize,
+    ) -> Result<(), Self::Error>;
 }
 
 #[derive(Debug)]
@@ -295,6 +303,16 @@ where
             self.address,
             &[(reg as u8) << 3 | (channel as u8) << 1u8, payload],
         )
+    }
+
+    fn write_cycle(
+        &mut self,
+        channel: Channel,
+        reg: Registers,
+        payload: Vec<u8, FIFO_MAX_TRANSMITION_LENGTH>,
+        length: usize,
+    ) -> Result<(), Self::Error> {
+        Ok(())
     }
 }
 
@@ -366,6 +384,30 @@ where
     ) -> Result<(), Self::Error> {
         self.spi
             .write(&[(reg as u8) << 3 | (channel as u8) << 1u8, payload])
+    }
+
+    fn write_cycle(
+        &mut self,
+        channel: Channel,
+        reg: Registers,
+        payload: Vec<u8, FIFO_MAX_TRANSMITION_LENGTH>,
+        length: usize,
+    ) -> Result<(), Self::Error> {
+        if length > FIFO_SIZE {
+            return Ok(());
+        }
+
+        let header = (reg as u8) << 3 | (channel as u8) << 1;
+
+        // Build the SPI TX buffer
+        let mut tx: Vec<u8, FIFO_MAX_TRANSMITION_LENGTH> = Vec::new();
+        tx.push(header).unwrap();
+        tx.extend_from_slice(&payload[..length]).unwrap();
+
+        // Send it
+        self.spi.write(&tx)?;
+
+        Ok(())
     }
 }
 
@@ -482,12 +524,14 @@ where
         pin_number: GPIO,
         pin_direction: PinMode,
     ) -> Result<(), BUS::Error> {
-        let mut temp_io_direction_register = self.bus.read_register(Channel::A, Registers::IODir)?;
+        let mut temp_io_direction_register =
+            self.bus.read_register(Channel::A, Registers::IODir)?;
         match pin_direction {
             PinMode::Output => temp_io_direction_register |= 0x01 << (pin_number as u8),
             PinMode::Input => temp_io_direction_register &= !(0x01 << (pin_number as u8)),
         }
-        self.bus.write_register(Channel::A, Registers::IODir, temp_io_direction_register)
+        self.bus
+            .write_register(Channel::A, Registers::IODir, temp_io_direction_register)
     }
 
     pub fn gpio_set_pin_state(
@@ -495,12 +539,14 @@ where
         pin_number: GPIO,
         pin_state: PinState,
     ) -> Result<(), BUS::Error> {
-        let mut temp_io_direction_register = self.bus.read_register(Channel::A, Registers::IOState)?;
+        let mut temp_io_direction_register =
+            self.bus.read_register(Channel::A, Registers::IOState)?;
         match pin_state {
             PinState::High => temp_io_direction_register |= 0x01 << (pin_number as u8),
             PinState::Low => temp_io_direction_register &= !(0x01 << (pin_number as u8)),
         }
-        self.bus.write_register(Channel::A, Registers::IOState, temp_io_direction_register)
+        self.bus
+            .write_register(Channel::A, Registers::IOState, temp_io_direction_register)
     }
 
     pub fn gpio_get_pin_state(&mut self, pin_number: GPIO) -> Result<PinState, BUS::Error> {
@@ -517,11 +563,13 @@ where
     }
 
     pub fn gpio_set_port_mode(&mut self, port_io: u8) -> Result<(), BUS::Error> {
-        self.bus.write_register(Channel::A, Registers::IODir, port_io)
+        self.bus
+            .write_register(Channel::A, Registers::IODir, port_io)
     }
 
     pub fn gpio_set_port_state(&mut self, port_state: u8) -> Result<(), BUS::Error> {
-        self.bus.write_register(Channel::A, Registers::IOState, port_state)
+        self.bus
+            .write_register(Channel::A, Registers::IOState, port_state)
     }
 
     pub fn set_pin_interrupt(
@@ -753,6 +801,15 @@ where
         length: usize,
     ) -> Result<Vec<u8, FIFO_MAX_TRANSMITION_LENGTH>, BUS::Error> {
         self.bus.read_cycle(self.channel, Registers::RhrThr, length)
+    }
+
+    pub fn write_cycle(
+        &mut self,
+        payload: Vec<u8, FIFO_MAX_TRANSMITION_LENGTH>,
+        length: usize,
+    ) -> Result<(), BUS::Error> {
+        self.bus
+            .write_cycle(self.channel, Registers::RhrThr, payload, length)
     }
 }
 
