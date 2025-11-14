@@ -134,6 +134,7 @@ pub enum InterruptEventTest {
     INPUT_PIN_CHANGE_STATE,
     RECEIVE_XOFF,
     CTS_RTS_CHANGE,
+    NO_INTERRUPT,
     UNKNOWN,
 }
 /// Extra Features Control Register options
@@ -582,7 +583,7 @@ where
 
     pub fn interrupt_pending_test(&mut self, channel: Channel) -> Result<u8, BUS::Error> {
         let ipt = self.read_register(channel, Registers::FcrIir)?;
-        Ok(ipt & 0x01)
+        Ok(!(ipt & 0x01))
     }
 
     pub fn isr(&mut self, channel: Channel) -> Result<InterruptEventTest, BUS::Error> {
@@ -591,15 +592,21 @@ where
         // interrupt_identification_register >>= 1;
         interrupt_identification_register &= 0x3E;
         match interrupt_identification_register {
-            0x06 => Ok(InterruptEventTest::RECEIVE_LINE_STATUS_ERROR),
-            0x0C => Ok(InterruptEventTest::RECEIVE_TIMEOUT_INTERRUPT),
-            0x04 => Ok(InterruptEventTest::RHR_INTERRUPT),
-            0x02 => Ok(InterruptEventTest::THR_INTERRUPT),
-            0x00 => Ok(InterruptEventTest::MODEM_INTERRUPT),
-            0x30 => Ok(InterruptEventTest::INPUT_PIN_CHANGE_STATE),
-            0x10 => Ok(InterruptEventTest::RECEIVE_XOFF),
-            0x20 => Ok(InterruptEventTest::CTS_RTS_CHANGE),
-            _ => Ok(InterruptEventTest::UNKNOWN),
+            0b000110 => Ok(InterruptEventTest::RECEIVE_LINE_STATUS_ERROR),
+            0b001100 => Ok(InterruptEventTest::RECEIVE_TIMEOUT_INTERRUPT),
+            0b000100 => Ok(InterruptEventTest::RHR_INTERRUPT),
+            0b000010 => Ok(InterruptEventTest::THR_INTERRUPT),
+            0b000000 => Ok(InterruptEventTest::MODEM_INTERRUPT),
+            0b110000 => Ok(InterruptEventTest::INPUT_PIN_CHANGE_STATE),
+            0b010000 => Ok(InterruptEventTest::RECEIVE_XOFF),
+            0b100000 => Ok(InterruptEventTest::CTS_RTS_CHANGE),
+            _ => {
+                if (interrupt_identification_register & 1) == 0 {
+                    Ok(InterruptEventTest::NO_INTERRUPT)
+                } else {
+                    Ok(InterruptEventTest::UNKNOWN)
+                }
+            }
         }
     }
 
@@ -761,7 +768,11 @@ where
         Ok(())
     }
 
-    pub fn read_cycle(&mut self, channel: Channel, length: usize) -> Result<Vec<u8, FIFO_MAX_TRANSMITION_LENGTH>, BUS::Error> {
+    pub fn read_cycle(
+        &mut self,
+        channel: Channel,
+        length: usize,
+    ) -> Result<Vec<u8, FIFO_MAX_TRANSMITION_LENGTH>, BUS::Error> {
         self.bus.read_cycle(channel, Registers::RhrThr, length)
     }
 }
