@@ -125,17 +125,17 @@ impl core::fmt::Display for PinState {
 }
 
 #[allow(non_camel_case_types)]
-pub enum InterruptEventTest {
-    RECEIVE_LINE_STATUS_ERROR,
-    RECEIVE_TIMEOUT_INTERRUPT,
-    RHR_INTERRUPT,
-    THR_INTERRUPT,
-    MODEM_INTERRUPT,
-    INPUT_PIN_CHANGE_STATE,
-    RECEIVE_XOFF,
-    CTS_RTS_CHANGE,
-    NO_INTERRUPT,
-    UNKNOWN,
+pub enum InterruptEvents {
+    NO_INTERRUPT,              // No Interrupt at all
+    RECEIVE_LINE_STATUS_ERROR, // Overrun Error (OE), Framing Error (FE), Parity Error (PE), or Break Interrupt (BI) errors occur in characters in the RX FIFO
+    RECEIVE_TIMEOUT_INTERRUPT, // stale data in RX FIFO
+    RHR_INTERRUPT, // receive data ready (FIFO disable) or RX FIFO above trigger level (FIFO enable)
+    THR_INTERRUPT, // transmit FIFO empty (FIFO disable) or TX FIFO passes above trigger level (FIFO enable)
+    MODEM_INTERRUPT, // change of state of modem input pins
+    INPUT_PIN_CHANGE_STATE, // input pins change of state
+    RECEIVE_XOFF,  // receive Xoff character(s)/special character
+    CTS_RTS_CHANGE, // RTS pin or CTS pin change state from active (LOW) to inactive (HIGH)
+    UNKNOWN,       // None of the above (shouldn't bee there, but you never know)
 }
 /// Extra Features Control Register options
 #[derive()]
@@ -622,24 +622,24 @@ where
         Ok(!(ipt & 0x01))
     }
 
-    pub fn isr(&mut self) -> Result<InterruptEventTest, BUS::Error> {
+    pub fn isr(&mut self) -> Result<InterruptEvents, BUS::Error> {
         let mut interrupt_identification_register = self.read_register(Registers::FcrIir)?;
         // interrupt_identification_register >>= 1;
         interrupt_identification_register &= 0x3E;
         match interrupt_identification_register {
-            0b000110 => Ok(InterruptEventTest::RECEIVE_LINE_STATUS_ERROR),
-            0b001100 => Ok(InterruptEventTest::RECEIVE_TIMEOUT_INTERRUPT),
-            0b000100 => Ok(InterruptEventTest::RHR_INTERRUPT),
-            0b000010 => Ok(InterruptEventTest::THR_INTERRUPT),
-            0b000000 => Ok(InterruptEventTest::MODEM_INTERRUPT),
-            0b110000 => Ok(InterruptEventTest::INPUT_PIN_CHANGE_STATE),
-            0b010000 => Ok(InterruptEventTest::RECEIVE_XOFF),
-            0b100000 => Ok(InterruptEventTest::CTS_RTS_CHANGE),
+            0b000110 => Ok(InterruptEvents::RECEIVE_LINE_STATUS_ERROR),
+            0b001100 => Ok(InterruptEvents::RECEIVE_TIMEOUT_INTERRUPT),
+            0b000100 => Ok(InterruptEvents::RHR_INTERRUPT),
+            0b000010 => Ok(InterruptEvents::THR_INTERRUPT),
+            0b000000 => Ok(InterruptEvents::MODEM_INTERRUPT),
+            0b110000 => Ok(InterruptEvents::INPUT_PIN_CHANGE_STATE),
+            0b010000 => Ok(InterruptEvents::RECEIVE_XOFF),
+            0b100000 => Ok(InterruptEvents::CTS_RTS_CHANGE),
             _ => {
                 if (interrupt_identification_register & 1) == 0 {
-                    Ok(InterruptEventTest::NO_INTERRUPT)
+                    Ok(InterruptEvents::NO_INTERRUPT)
                 } else {
-                    Ok(InterruptEventTest::UNKNOWN)
+                    Ok(InterruptEvents::UNKNOWN)
                 }
             }
         }
