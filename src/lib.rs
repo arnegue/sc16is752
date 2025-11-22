@@ -286,9 +286,9 @@ where
 
     fn read_cycle(
         &mut self,
-        channel: Channel,
-        reg: Registers,
-        length: usize,
+        _channel: Channel,
+        _reg: Registers,
+        _length: usize,
     ) -> Result<Vec<u8, FIFO_MAX_TRANSMITION_LENGTH>, Self::Error> {
         Ok(Vec::new())
     }
@@ -307,10 +307,10 @@ where
 
     fn write_cycle(
         &mut self,
-        channel: Channel,
-        reg: Registers,
-        payload: Vec<u8, FIFO_MAX_TRANSMITION_LENGTH>,
-        length: usize,
+        _channel: Channel,
+        _reg: Registers,
+        _payload: Vec<u8, FIFO_MAX_TRANSMITION_LENGTH>,
+        _length: usize,
     ) -> Result<(), Self::Error> {
         Ok(())
     }
