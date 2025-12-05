@@ -631,7 +631,12 @@ where
     pub fn isr(&mut self, channel: Channel) -> Result<InterruptEvents, BUS::Error> {
         let mut interrupt_identification_register =
             self.read_register(channel, Registers::FcrIir)?;
-        // interrupt_identification_register >>= 1;
+
+        // Is there a pending interrupt
+        if interrupt_identification_register & 1 == 1 {
+            return Ok(InterruptEvents::NO_INTERRUPT);
+        }
+
         interrupt_identification_register &= 0x3E;
         match interrupt_identification_register {
             0b000110 => Ok(InterruptEvents::RECEIVE_LINE_STATUS_ERROR),
@@ -642,13 +647,7 @@ where
             0b110000 => Ok(InterruptEvents::INPUT_PIN_CHANGE_STATE),
             0b010000 => Ok(InterruptEvents::RECEIVE_XOFF),
             0b100000 => Ok(InterruptEvents::CTS_RTS_CHANGE),
-            _ => {
-                if (interrupt_identification_register & 1) == 0 {
-                    Ok(InterruptEvents::NO_INTERRUPT)
-                } else {
-                    Ok(InterruptEvents::UNKNOWN)
-                }
-            }
+            _ => Ok(InterruptEvents::UNKNOWN),
         }
     }
 
