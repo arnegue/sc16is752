@@ -6,15 +6,15 @@
 //! let mut device = SC16IS752::new(SC16IS752i2c::new(SC16IS750_ADDRESS, i2c))?;
 //! let mut device = SC16IS752::new(SC16IS752spi::new(spi_dev))?;
 //!
-//! device.initalise( UartConfig::default().baudrate(9600))?;
+//! device.initalise(Channel::A, UartConfig::default().baudrate(9600))?;
 //! device.gpio_set_pin_mode(GPIO::GPIO0, PinMode::Output)?;
 //! device.flush(Channel::A)?;
 //! loop {
-//!     device.write_byte( "a".as_bytes()[0])?;
+//!     device.write_byte(Channel::A, "a".as_bytes()[0])?;
 //!     println!("RX A = {:?}", device.read_byte(Channel::A)?);
 //!
 //!     for byte in b"This is channel A" {
-//!         device.write_byte( byte)?;
+//!         device.write_byte(Channel::A, byte)?;
 //!     }
 //!     let mut buf_a: Vec<u8> = vec![];
 //!     for _ in 0..device.fifo_available_data(Channel::A)? {
@@ -421,59 +421,66 @@ where
     fifo: [u8; 2],
     peek_flags: [bool; 2],
     peek_buf: [Option<u8>; 2],
-    channel: Channel,
 }
 
 impl<BUS> SC16IS752<BUS>
 where
     BUS: Bus,
 {
-    pub fn new(bus: BUS, xtal_freq: u32, channel: Channel) -> Self {
+    pub fn new(bus: BUS, xtal_freq: u32) -> Self {
         Self {
             bus,
             xtal_freq,
             fifo: [0u8; 2],
             peek_flags: [false; 2],
             peek_buf: [None; 2],
-            channel,
         }
     }
 
     /// Initalises a single UART using UartConfig struct
-    pub fn initialise_uart(&mut self, config: UartConfig) -> Result<(), BUS::Error> {
-        self.fifo_enable(true)?;
-        self.set_baudrate(config.baud)?;
-        self.set_line(config.word_length, config.parity, config.stop_bit)?;
+    pub fn initialise_uart(
+        &mut self,
+        channel: Channel,
+        config: UartConfig,
+    ) -> Result<(), BUS::Error> {
+        self.fifo_enable(channel, true)?;
+        self.set_baudrate(channel, config.baud)?;
+        self.set_line(channel, config.word_length, config.parity, config.stop_bit)?;
         Ok(())
     }
 
-    fn read_register(&mut self, reg: Registers) -> Result<u8, BUS::Error> {
-        self.bus.read_register(self.channel, reg)
+    fn read_register(&mut self, channel: Channel, reg: Registers) -> Result<u8, BUS::Error> {
+        self.bus.read_register(channel, reg)
     }
 
-    fn write_register(&mut self, reg: Registers, payload: u8) -> Result<(), BUS::Error> {
-        self.bus.write_register(self.channel, reg, payload)
+    fn write_register(
+        &mut self,
+        channel: Channel,
+        reg: Registers,
+        payload: u8,
+    ) -> Result<(), BUS::Error> {
+        self.bus.write_register(channel, reg, payload)
     }
 
-    fn set_baudrate(&mut self, baudrate: u32) -> Result<(), BUS::Error> {
-        let prescaler = match self.read_register(Registers::MCR)? {
+    fn set_baudrate(&mut self, channel: Channel, baudrate: u32) -> Result<(), BUS::Error> {
+        let prescaler = match self.read_register(channel, Registers::MCR)? {
             0 => 1,
             _ => 4,
         };
         let divisor = (self.xtal_freq / prescaler as u32) / (baudrate * 16);
 
-        let mut temp_line_control_register = self.read_register(Registers::LCR)?;
+        let mut temp_line_control_register = self.read_register(channel, Registers::LCR)?;
 
         // Move to special register mode where RhrThr is DLL and IER is DLH registers.
         temp_line_control_register |= 0x80;
-        self.write_register(Registers::LCR, temp_line_control_register)?;
+        self.write_register(channel, Registers::LCR, temp_line_control_register)?;
 
-        self.write_register(Registers::RhrThr, divisor.try_into().unwrap())?;
-        self.write_register(Registers::IER, (divisor >> 8).try_into().unwrap())?;
+        self.write_register(channel, Registers::RhrThr, divisor.try_into().unwrap())?;
+        self.write_register(channel, Registers::IER, (divisor >> 8).try_into().unwrap())?;
 
         // Move out of special register mode
         temp_line_control_register &= 0x7F;
-        self.write_register(Registers::LCR, temp_line_control_register)?;
+        self.write_register(channel, Registers::LCR, temp_line_control_register)?;
 
         // {
         //     let actual_baudrate = (CRYSTAL_FREQ / prescaler as u32) / (16 * divisor);
@@ -489,11 +496,12 @@ where
 
     fn set_line(
         &mut self,
+        channel: Channel,
         data_length: u8,
         parity_select: Parity,
         stop_length: u8,
     ) -> Result<(), BUS::Error> {
-        let mut temp_line_control_register: u8 = self.read_register(Registers::LCR)?;
+        let mut temp_line_control_register: u8 = self.read_register(channel, Registers::LCR)?;
         temp_line_control_register &= 0xC0;
         {
             //println!("line_control_register Register: {temp_line_control_register:#04x}");
@@ -515,7 +523,7 @@ where
             Parity::ForcedParity1 => temp_line_control_register |= 0x28,
             Parity::ForcedParity0 => temp_line_control_register |= 0x38,
         }
-        self.write_register(Registers::LCR, temp_line_control_register)
+        self.write_register(channel, Registers::LCR, temp_line_control_register)
     }
 
     /// This register is used to set an I/O pin direction. Bit 0 to bit 7 controls GPIO0 to GPIO7.
@@ -524,14 +532,12 @@ where
         pin_number: GPIO,
         pin_direction: PinMode,
     ) -> Result<(), BUS::Error> {
-        let mut temp_io_direction_register =
-            self.bus.read_register(Channel::A, Registers::IODir)?;
+        let mut temp_io_direction_register = self.read_register(Channel::A, Registers::IODir)?;
         match pin_direction {
             PinMode::Output => temp_io_direction_register |= 0x01 << (pin_number as u8),
             PinMode::Input => temp_io_direction_register &= !(0x01 << (pin_number as u8)),
         }
-        self.bus
-            .write_register(Channel::A, Registers::IODir, temp_io_direction_register)
+        self.write_register(Channel::A, Registers::IODir, temp_io_direction_register)
     }
 
     pub fn gpio_set_pin_state(
@@ -539,18 +545,16 @@ where
         pin_number: GPIO,
         pin_state: PinState,
     ) -> Result<(), BUS::Error> {
-        let mut temp_io_direction_register =
-            self.bus.read_register(Channel::A, Registers::IOState)?;
+        let mut temp_io_direction_register = self.read_register(Channel::A, Registers::IOState)?;
         match pin_state {
             PinState::High => temp_io_direction_register |= 0x01 << (pin_number as u8),
             PinState::Low => temp_io_direction_register &= !(0x01 << (pin_number as u8)),
         }
-        self.bus
-            .write_register(Channel::A, Registers::IOState, temp_io_direction_register)
+        self.write_register(Channel::A, Registers::IOState, temp_io_direction_register)
     }
 
     pub fn gpio_get_pin_state(&mut self, pin_number: GPIO) -> Result<PinState, BUS::Error> {
-        let temp_iostate = self.bus.read_register(Channel::A, Registers::IOState)?;
+        let temp_iostate = self.read_register(Channel::A, Registers::IOState)?;
 
         if (temp_iostate & (0x01 << (pin_number as u8))) == 0 {
             return Ok(PinState::Low);
@@ -559,24 +563,22 @@ where
     }
 
     pub fn gpio_get_port_state(&mut self) -> Result<u8, BUS::Error> {
-        self.bus.read_register(Channel::A, Registers::IOState)
+        self.read_register(Channel::A, Registers::IOState)
     }
 
     pub fn gpio_set_port_mode(&mut self, port_io: u8) -> Result<(), BUS::Error> {
-        self.bus
-            .write_register(Channel::A, Registers::IODir, port_io)
+        self.write_register(Channel::A, Registers::IODir, port_io)
     }
 
     pub fn gpio_set_port_state(&mut self, port_state: u8) -> Result<(), BUS::Error> {
-        self.bus
-            .write_register(Channel::A, Registers::IOState, port_state)
+        self.write_register(Channel::A, Registers::IOState, port_state)
     }
 
     pub fn set_pin_interrupt(
         &mut self,
         io_interrupt_enable_register: u8,
     ) -> Result<(), BUS::Error> {
-        self.bus.write_register(
+        self.write_register(
             Channel::A,
             Registers::IOIntEna,
             io_interrupt_enable_register,
@@ -584,13 +586,13 @@ where
     }
 
     pub fn reset_device(&mut self) -> Result<(), BUS::Error> {
-        let mut reg: u8 = self.read_register(Registers::IOControl)?;
+        let mut reg: u8 = self.read_register(Channel::A, Registers::IOControl)?;
         reg |= 0x08;
-        self.write_register(Registers::IOControl, reg)
+        self.write_register(Channel::A, Registers::IOControl, reg)
     }
 
     pub fn modem_pin(&mut self, state: bool) -> Result<(), BUS::Error> {
-        let mut temp_io_control_register = self.read_register(Registers::IOControl)?;
+        let mut temp_io_control_register = self.read_register(Channel::A, Registers::IOControl)?;
 
         if state {
             temp_io_control_register |= 0x02;
@@ -598,11 +600,11 @@ where
             temp_io_control_register &= 0xFD;
         }
 
-        self.write_register(Registers::IOControl, temp_io_control_register)
+        self.write_register(Channel::A, Registers::IOControl, temp_io_control_register)
     }
 
     pub fn gpio_latch(&mut self, latch: bool) -> Result<(), BUS::Error> {
-        let mut temp_io_control_register = self.read_register(Registers::IOControl)?;
+        let mut temp_io_control_register = self.read_register(Channel::A, Registers::IOControl)?;
 
         if !latch {
             temp_io_control_register &= 0xFE;
@@ -610,20 +612,25 @@ where
             temp_io_control_register |= 0x01;
         }
 
-        self.write_register(Registers::IOControl, temp_io_control_register)
+        self.write_register(Channel::A, Registers::IOControl, temp_io_control_register)
     }
 
-    pub fn interrupt_control(&mut self, interrupt_enable_register: u8) -> Result<(), BUS::Error> {
-        self.write_register(Registers::IER, interrupt_enable_register)
+    pub fn interrupt_control(
+        &mut self,
+        channel: Channel,
+        interrupt_enable_register: u8,
+    ) -> Result<(), BUS::Error> {
+        self.write_register(channel, Registers::IER, interrupt_enable_register)
     }
 
-    pub fn interrupt_pending_test(&mut self) -> Result<u8, BUS::Error> {
-        let ipt = self.read_register(Registers::FcrIir)?;
+    pub fn interrupt_pending_test(&mut self, channel: Channel) -> Result<u8, BUS::Error> {
+        let ipt = self.read_register(channel, Registers::FcrIir)?;
         Ok(!(ipt & 0x01))
     }
 
-    pub fn isr(&mut self) -> Result<InterruptEvents, BUS::Error> {
-        let mut interrupt_identification_register = self.read_register(Registers::FcrIir)?;
+    pub fn isr(&mut self, channel: Channel) -> Result<InterruptEvents, BUS::Error> {
+        let mut interrupt_identification_register =
+            self.read_register(channel, Registers::FcrIir)?;
         // interrupt_identification_register >>= 1;
         interrupt_identification_register &= 0x3E;
         match interrupt_identification_register {
@@ -645,84 +652,89 @@ where
         }
     }
 
-    pub fn fifo_enable(&mut self, state: bool) -> Result<(), BUS::Error> {
-        let mut fifo_control_register = self.read_register(Registers::FcrIir)?;
+    pub fn fifo_enable(&mut self, channel: Channel, state: bool) -> Result<(), BUS::Error> {
+        let mut fifo_control_register = self.read_register(channel, Registers::FcrIir)?;
 
         if !state {
             fifo_control_register &= 0xFE;
         } else {
             fifo_control_register |= 0x01;
         }
-        self.write_register(Registers::FcrIir, fifo_control_register)
+        self.write_register(channel, Registers::FcrIir, fifo_control_register)
     }
 
-    pub fn fifo_reset(&mut self, state: bool) -> Result<(), BUS::Error> {
-        let mut temp_fcr = self.read_register(Registers::FcrIir)?;
+    pub fn fifo_reset(&mut self, channel: Channel, state: bool) -> Result<(), BUS::Error> {
+        let mut temp_fcr = self.read_register(channel, Registers::FcrIir)?;
 
         if !state {
             temp_fcr |= 0x04;
         } else {
             temp_fcr |= 0x02;
         }
-        self.write_register(Registers::FcrIir, temp_fcr)
+        self.write_register(channel, Registers::FcrIir, temp_fcr)
     }
 
-    pub fn fifo_set_trigger_level(&mut self, rx_fifo: bool, length: u8) -> Result<(), BUS::Error> {
-        let mut temp_reg = self.read_register(Registers::MCR)?;
+    pub fn fifo_set_trigger_level(
+        &mut self,
+        channel: Channel,
+        rx_fifo: bool,
+        length: u8,
+    ) -> Result<(), BUS::Error> {
+        let mut temp_reg = self.read_register(channel, Registers::MCR)?;
         temp_reg |= 0x04;
-        self.write_register(Registers::MCR, temp_reg)?; // SET MCR[2] to '1' to use TLR register or trigger level control in FCR
-                                                        // register
+        self.write_register(channel, Registers::MCR, temp_reg)?; // SET MCR[2] to '1' to use TLR register or trigger level control in FCR
+                                                                 // register
 
-        temp_reg = self.read_register(Registers::FcrIir)?;
-        self.write_register(Registers::FcrIir, temp_reg | 0x10)?; // set ERF[4] to '1' to use the  enhanced features
+        temp_reg = self.read_register(channel, Registers::FcrIir)?;
+        self.write_register(channel, Registers::FcrIir, temp_reg | 0x10)?; // set ERF[4] to '1' to use the  enhanced features
 
         if !rx_fifo {
-            self.write_register(Registers::SprTlr, length << 4)?; // Tx FIFO trigger level setting
+            self.write_register(channel, Registers::SprTlr, length << 4)?; // Tx FIFO trigger level setting
         } else {
-            self.write_register(Registers::SprTlr, length)?; // Rx FIFO Trigger level setting
+            self.write_register(channel, Registers::SprTlr, length)?; // Rx FIFO Trigger level setting
         }
-        self.write_register(Registers::FcrIir, temp_reg) // restore EFR register
+        self.write_register(channel, Registers::FcrIir, temp_reg) // restore EFR register
     }
 
-    pub fn fifo_available_data(&mut self) -> Result<u8, BUS::Error> {
+    pub fn fifo_available_data(&mut self, channel: Channel) -> Result<u8, BUS::Error> {
         // if self.fifo[channel as usize] == 0 {
-        self.fifo[self.channel as usize] = self.read_register(Registers::RXLVL)?;
+        self.fifo[channel as usize] = self.read_register(channel, Registers::RXLVL)?;
         // }
-        Ok(self.fifo[self.channel as usize])
+        Ok(self.fifo[channel as usize])
     }
 
-    pub fn fifo_available_space(&mut self) -> Result<u8, BUS::Error> {
-        self.read_register(Registers::TXLVL)
+    pub fn fifo_available_space(&mut self, channel: Channel) -> Result<u8, BUS::Error> {
+        self.read_register(channel, Registers::TXLVL)
     }
 
-    fn write_byte(&mut self, val: &u8) -> Result<(), BUS::Error> {
-        self.write_register(Registers::RhrThr, *val)
+    fn write_byte(&mut self, channel: Channel, val: &u8) -> Result<(), BUS::Error> {
+        self.write_register(channel, Registers::RhrThr, *val)
     }
 
-    pub fn write(&mut self, payload: &[u8]) -> Result<usize, BUS::Error> {
-        let space_left = self.fifo_available_space()? as usize;
+    pub fn write(&mut self, channel: Channel, payload: &[u8]) -> Result<usize, BUS::Error> {
+        let space_left = self.fifo_available_space(channel)? as usize;
         let len = payload.len().min(space_left);
 
         for i in 0..len {
-            self.write_byte(&payload[i])?;
+            self.write_byte(channel, &payload[i])?;
         }
         Ok(len)
     }
 
-    fn read_byte(&mut self) -> Result<Option<u8>, BUS::Error> {
-        if self.fifo_available_data()? == 0 {
+    fn read_byte(&mut self, channel: Channel) -> Result<Option<u8>, BUS::Error> {
+        if self.fifo_available_data(channel)? == 0 {
             //println!("No data");
             return Ok(None);
         }
-        Ok(Some(self.read_register(Registers::RhrThr)?))
+        Ok(Some(self.read_register(channel, Registers::RhrThr)?))
     }
 
-    pub fn read(&mut self, buf: &mut [u8]) -> Result<usize, BUS::Error> {
-        let available = self.fifo_available_data()? as usize;
+    pub fn read(&mut self, channel: Channel, buf: &mut [u8]) -> Result<usize, BUS::Error> {
+        let available = self.fifo_available_data(channel)? as usize;
         let len = buf.len().min(available);
 
         for i in 0..len {
-            if let Ok(Some(byte)) = self.read_byte() {
+            if let Ok(Some(byte)) = self.read_byte(channel) {
                 buf[i] = byte;
             }
         }
@@ -731,66 +743,68 @@ where
 
     pub fn enable_features(
         &mut self,
+        channel: Channel,
         feature: FeaturesRegister,
         enable: bool,
     ) -> Result<(), BUS::Error> {
-        let mut temp_extra_features_control_register = self.read_register(Registers::EFCR)?;
+        let mut temp_extra_features_control_register =
+            self.read_register(channel, Registers::EFCR)?;
 
         if !enable {
             temp_extra_features_control_register |= feature as u8;
         } else {
             temp_extra_features_control_register &= !(feature as u8);
         }
-        self.write_register(Registers::EFCR, temp_extra_features_control_register)
+        self.write_register(
+            channel,
+            Registers::EFCR,
+            temp_extra_features_control_register,
+        )
     }
 
     pub fn ping(&mut self) -> Result<bool, BUS::Error> {
-        self.bus
-            .write_register(Channel::A, Registers::SprTlr, 0x55)?;
+        self.write_register(Channel::A, Registers::SprTlr, 0x55)?;
 
-        if self.bus.read_register(Channel::A, Registers::SprTlr)? != 0x55 {
+        if self.read_register(Channel::A, Registers::SprTlr)? != 0x55 {
             return Ok(false);
         }
 
-        self.bus
-            .write_register(Channel::A, Registers::SprTlr, 0xAA)?;
+        self.write_register(Channel::A, Registers::SprTlr, 0xAA)?;
 
-        if self.bus.read_register(Channel::A, Registers::SprTlr)? != 0xAA {
+        if self.read_register(Channel::A, Registers::SprTlr)? != 0xAA {
             return Ok(false);
         }
 
-        self.bus
-            .write_register(Channel::B, Registers::SprTlr, 0x55)?;
+        self.write_register(Channel::B, Registers::SprTlr, 0x55)?;
 
-        if self.bus.read_register(Channel::B, Registers::SprTlr)? != 0x55 {
+        if self.read_register(Channel::B, Registers::SprTlr)? != 0x55 {
             return Ok(false);
         }
 
-        self.bus
-            .write_register(Channel::B, Registers::SprTlr, 0xAA)?;
+        self.write_register(Channel::B, Registers::SprTlr, 0xAA)?;
 
-        if self.bus.read_register(Channel::B, Registers::SprTlr)? != 0xAA {
+        if self.read_register(Channel::B, Registers::SprTlr)? != 0xAA {
             return Ok(false);
         }
 
         Ok(true)
     }
 
-    pub fn flush(&mut self) -> Result<(), BUS::Error> {
+    pub fn flush(&mut self, channel: Channel) -> Result<(), BUS::Error> {
         let mut tmp_line_status_register: u8 = 0;
 
         while (tmp_line_status_register & 0x20) == 0 {
-            tmp_line_status_register = self.read_register(Registers::LSR)?;
+            tmp_line_status_register = self.read_register(channel, Registers::LSR)?;
         }
         Ok(())
     }
 
-    pub fn peek(&mut self) -> Result<(), BUS::Error> {
-        if self.peek_flags[self.channel as usize] {
-            self.peek_buf[self.channel as usize] = self.read_byte()?;
+    pub fn peek(&mut self, channel: Channel) -> Result<(), BUS::Error> {
+        if self.peek_flags[channel as usize] {
+            self.peek_buf[channel as usize] = self.read_byte(channel)?;
 
-            if self.peek_buf[self.channel as usize].is_some() {
-                self.peek_flags[self.channel as usize] = true;
+            if self.peek_buf[channel as usize].is_some() {
+                self.peek_flags[channel as usize] = true;
             }
         }
         Ok(())
@@ -798,18 +812,20 @@ where
 
     pub fn read_cycle(
         &mut self,
+        channel: Channel,
         length: usize,
     ) -> Result<Vec<u8, FIFO_MAX_TRANSMITION_LENGTH>, BUS::Error> {
-        self.bus.read_cycle(self.channel, Registers::RhrThr, length)
+        self.bus.read_cycle(channel, Registers::RhrThr, length)
     }
 
     pub fn write_cycle(
         &mut self,
         payload: Vec<u8, FIFO_MAX_TRANSMITION_LENGTH>,
+        channel: Channel,
         length: usize,
     ) -> Result<(), BUS::Error> {
         self.bus
-            .write_cycle(self.channel, Registers::RhrThr, payload, length)
+            .write_cycle(channel, Registers::RhrThr, payload, length)
     }
 }
 
